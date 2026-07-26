@@ -14,6 +14,7 @@
  */
 
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const path = require('path');
 const express = require('express');
 const cookieParser = require('cookie-parser');
@@ -103,13 +104,14 @@ app.post('/login', (req, res) => {
   // out the password check or force the WHERE clause to always be true.
   let user = null;
   try {
-    // FIX: Using ? placeholders prevents username/password from altering the SQL logic.
-    user = db.prepare('SELECT * FROM users WHERE username = ? AND password = ?').get(username, password);
+    // FIX: Only search by username first
+    user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
   } catch (e) {
     user = null;
   }
 
-  if (!user) {
+  // FIX: Compare the plain password they typed with the hashed password in the database
+  if (!user || !bcrypt.compareSync(password, user.password)) {
     return res.send(V.renderLogin({ session: req.session, error: 'Invalid username or password.' }));
   }
   startSession(res, user);
@@ -126,8 +128,9 @@ app.post('/register', (req, res) => {
     return res.send(V.renderRegister({ session: req.session, error: 'Username and password are required.' }));
   }
   try {
+    const hashedPassword = bcrypt.hashSync(password, 10);
     const info = db.prepare('INSERT INTO users (username, password, credits) VALUES (?, ?, 100)')
-      .run(username.trim(), password);
+      .run(username.trim(), hashedPassword);
     startSession(res, { id: info.lastInsertRowid, username: username.trim() });
     res.redirect('/?msg=' + encodeURIComponent('Account created. You have 100 starter credits.'));
   } catch (e) {

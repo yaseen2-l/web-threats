@@ -12,6 +12,7 @@
 const path = require('path');
 const fs = require('fs');
 const Database = require('better-sqlite3');
+const bcrypt = require('bcryptjs');
 
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -67,12 +68,12 @@ function seed() {
     'INSERT INTO users (username, password, credits, is_admin) VALUES (?, ?, ?, ?)'
   );
   // Regular demo accounts (share these with graders in your README if you like).
-  insUser.run('alice', 'sunshine22', 500, 0);
-  insUser.run('bob', 'hunter2!', 320, 0);
-  insUser.run('mallory', 'letmein123', 40, 0);
+  insUser.run('alice', bcrypt.hashSync('sunshine22', 10), 500, 0);
+  insUser.run('bob', bcrypt.hashSync('hunter2!', 10), 320, 0);
+  insUser.run('mallory', bcrypt.hashSync('letmein123', 10), 40, 0);
   // Hidden high-value account. Students should NOT be told this password;
   // they recover it through SQL injection on /search.
-  insUser.run('quartermaster', 'Gr@nite-Ferry-71', 9999, 1);
+  insUser.run('quartermaster', bcrypt.hashSync('Gr@nite-Ferry-71', 10), 9999, 1);
 
   const insItem = db.prepare(
     'INSERT INTO items (title, description, price, seller_id) VALUES (?, ?, ?, ?)'
