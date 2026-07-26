@@ -29,6 +29,12 @@ const PORT = process.env.PORT || 3000;
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, 'public')));
+app.use((req, res, next) => {
+  res.setHeader('Content-Security-Policy',
+    "default-src 'self'; script-src 'self'; style-src 'self'; " +
+    "img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'");
+  next();
+});
 
 // ---- Tiny in-memory session store -----------------------------------------
 // sessions: sid -> { userId, username }
@@ -36,12 +42,12 @@ const sessions = new Map();
 
 function startSession(res, user) {
   const sid = crypto.randomBytes(24).toString('hex');
-  sessions.set(sid, { userId: user.id, username: user.username });
+  const csrf = crypto.randomBytes(32).toString('hex'); // Generate CSRF token
+  
+  sessions.set(sid, { userId: user.id, username: user.username, csrf: csrf }); // Store it
 
-  // VULN [V2]/[V3]: the session cookie is missing HttpOnly, SameSite and Secure.
-  //   - No HttpOnly  => document.cookie is readable by injected JS (helps XSS).
-  //   - No SameSite  => the cookie rides along on cross-site requests (helps CSRF).
-  res.cookie('sid', sid, { path: '/' });
+  // Add sameSite: 'strict' to lock down the cookie
+  res.cookie('sid', sid, { path: '/', httpOnly: true, sameSite: 'strict' });
 }
 
 app.use((req, res, next) => {
@@ -74,12 +80,10 @@ app.get('/search', (req, res) => {
   // The search term is concatenated straight into the SQL string. A crafted
   // `q` can break out of the string literal and UNION in data from other
   // tables (the query returns 3 columns: id, title, price).
-  const sql = `SELECT id, title, price FROM items WHERE title LIKE '%${q}%'`;
-  // =========================================================================
-
   let rows = [];
   try {
-    rows = db.prepare(sql).all();
+    // FIX: Using ? ensures 'q' is treated as a literal string, preventing UNION injection.
+    rows = db.prepare('SELECT id, title, price FROM items WHERE title LIKE ?').all('%' + q + '%');
   } catch (e) {
     rows = [];
   }
@@ -97,12 +101,10 @@ app.post('/login', (req, res) => {
   // ============================ VULN [V1] SQL Injection =====================
   // Both values are concatenated into the query, so an attacker can comment
   // out the password check or force the WHERE clause to always be true.
-  const sql = `SELECT * FROM users WHERE username = '${username}' AND password = '${password}'`;
-  // =========================================================================
-
   let user = null;
   try {
-    user = db.prepare(sql).get();
+    // FIX: Using ? placeholders prevents username/password from altering the SQL logic.
+    user = db.prepare('SELECT * FROM users WHERE username = ? AND password = ?').get(username, password);
   } catch (e) {
     user = null;
   }
@@ -183,7 +185,12 @@ app.post('/wallet/transfer', (req, res) => {
   const me = currentUser(req);
   if (!me) return res.redirect('/login');
 
-  // ============================ VULN [V3] CSRF =============================
+  // Verify the CSRF token matches the one in their session
+  const ok = req.body._csrf && 
+    crypto.timingSafeEqual(Buffer.from(req.body._csrf), Buffer.from(req.session.csrf));
+  if (!ok) return res.status(403).send('CSRF token missing or invalid');
+
+    // ============================ VULN [V3] CSRF =============================
   // This state-changing action is authenticated purely by the session cookie.
   // There is NO anti-CSRF token and the cookie is not SameSite, so any page
   // on the internet can auto-submit this form using the victim's session.
